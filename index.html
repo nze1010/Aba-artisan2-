@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Aba Artisan</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2ecc71" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body{background:#f5f5f5;font-family:Inter,Arial,Helvetica,sans-serif}
+    .card{border:none;box-shadow:0 4px 16px rgba(0,0,0,.08)}
+    .hidden{display:none!important}
+    img.thumb{max-width:100%;border-radius:8px;margin-bottom:8px}
+  </style>
+  <script>
+    if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('service-worker.js');});}
+  </script>
+</head>
+<body class="py-5">
+<div class="container" id="appRoot">
+  <div id="authCard" class="card p-4 mx-auto" style="max-width:420px;">
+    <h3 class="text-center mb-3">Aba Artisan</h3>
+    <select id="roleSelect" class="form-select mb-2">
+      <option value="customer">Customer</option>
+      <option value="artisan">Artisan</option>
+      <option value="admin">Admin</option>
+    </select>
+    <div class="artisan-only hidden mb-2">
+      <input id="phone" type="tel" class="form-control" placeholder="Phone number">
+    </div>
+    <div class="artisan-only hidden mb-2">
+      <input id="skill" type="text" class="form-control" placeholder="Skill (e.g., Electrician)">
+    </div>
+    <input id="email" type="email" class="form-control mb-2" placeholder="Email">
+    <input id="password" type="password" class="form-control mb-3" placeholder="Password">
+    <div class="d-grid gap-2">
+      <button id="registerBtn" class="btn btn-outline-success">Register</button>
+      <button id="loginBtn" class="btn btn-success">Login</button>
+    </div>
+  </div>
+
+  <div id="dashboard" class="hidden">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 id="welcomeText" class="mb-0"></h4>
+      <button id="logoutBtn" class="btn btn-sm btn-danger">Logout</button>
+    </div>
+    <ul class="nav nav-tabs mb-3" id="dashTabs"></ul>
+    <div id="dashContent"></div>
+  </div>
+</div>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import {getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import {getFirestore,collection,doc,setDoc,getDoc,getDocs,query,where,addDoc,serverTimestamp} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+import {getStorage,ref,uploadBytes,getDownloadURL} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
+
+const firebaseConfig = {apiKey:"AIzaSyAZClfxJnvhMFZ4Y1Rpsfsu6LXwljrzjP8",authDomain:"aba-artisan.firebaseapp.com",projectId:"aba-artisan",storageBucket:"aba-artisan.appspot.com",messagingSenderId:"1024867712324",appId:"1:1024867712324:web:f9b7dfb127b1286a312b11"};
+initializeApp(firebaseConfig);
+const auth = getAuth();
+const db = getFirestore();
+const storage = getStorage();
+
+const authCard=document.getElementById('authCard');
+const dashboard=document.getElementById('dashboard');
+const roleSelect=document.getElementById('roleSelect');
+roleSelect.onchange = ()=>{ 
+  const art = roleSelect.value==='artisan'; 
+  document.querySelectorAll('.artisan-only').forEach(el=>el.classList.toggle('hidden',!art)); 
+};
+
+document.getElementById('registerBtn').onclick = async ()=>{
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value.trim();
+  const role = roleSelect.value;
+  const phone = document.getElementById('phone').value.trim();
+  const skill = document.getElementById('skill').value.trim();
+  if(!email||!password) return alert('Provide email and password');
+  try{
+    const {user}=await createUserWithEmailAndPassword(auth,email,password);
+    await setDoc(doc(db,'users',user.uid),{email,role,phone: role==='artisan'?phone:null,skill: role==='artisan'?skill:null,created:serverTimestamp()});
+    alert('Registered! Login now');
+  }catch(e){alert(e.message);}
+};
+
+document.getElementById('loginBtn').onclick = async ()=>{
+  const email=document.getElementById('email').value.trim();
+  const password=document.getElementById('password').value.trim();
+  try{await signInWithEmailAndPassword(auth,email,password);}catch(e){alert(e.message);}
+};
+
+document.getElementById('logoutBtn').onclick = ()=> signOut(auth);
+
+onAuthStateChanged(auth, async (user)=>{
+  if(user){
+    const snap=await getDoc(doc(db,'users',user.uid));
+    const data=snap.data(); showDashboard(user.email,data.role);
+  }else{
+    dashboard.classList.add('hidden'); authCard.classList.remove('hidden');
+  }
+});
+
+function showDashboard(email,role){
+  document.getElementById('welcomeText').textContent = `Hi, ${email}`;
+  authCard.classList.add('hidden'); dashboard.classList.remove('hidden');
+  renderTabs(role);
+}
+
+function renderTabs(role){
+  const tabs=[{id:'home',title:'Home',pane:homePane}];
+  if(role==='artisan') tabs.push({id:'portfolio',title:'My Portfolio',pane:artisanPane});
+  if(role==='customer') tabs.push({id:'browse',title:'Browse Artisans',pane:customerPane});
+  if(role==='admin') tabs.push({id:'admin',title:'User Admin',pane:adminPane});
+  const tabsEl=document.getElementById('dashTabs'); tabsEl.innerHTML='';
+  const content=document.getElementById('dashContent'); content.innerHTML='';
+  tabs.forEach((t,i)=>{
+    const li=document.createElement('li'); li.className='nav-item';
+    li.innerHTML=`<button class="nav-link${i===0?' active':''}" data-id="${t.id}">${t.title}</button>`;
+    tabsEl.appendChild(li); if(i===0) t.pane();
+  });
+  tabsEl.onclick=e=>{
+    if(e.target.dataset.id){
+      tabsEl.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+      e.target.classList.add('active'); content.innerHTML='';
+      const tab=tabs.find(x=>x.id===e.target.dataset.id); tab.pane();
+    }
+  };
+}
+
+function homePane(){ document.getElementById('dashContent').innerHTML='<div class="p-3"><h5>Dashboard Home</h5><p>Select a tab to continue.</p></div>'; }
+
+// ARTISAN
+function artisanPane(){
+  const content=document.getElementById('dashContent');
+  content.innerHTML=`<div class="p-3"><h5>Upload Your Work</h5>
+    <input type="file" id="fileInp" accept="image/*" class="form-control mb-2">
+    <button class="btn btn-success mb-3" id="uploadBtn">Upload & Publish</button>
+    <div id="myGallery" class="row"></div></div>`;
+  document.getElementById('uploadBtn').onclick=async ()=>{
+    const f=document.getElementById('fileInp').files[0]; if(!f) return alert('Choose image');
+    const uid=auth.currentUser.uid;
+    const refPath=`portfolio/${uid}/${Date.now()}_${f.name}`;
+    const fileRef=ref(storage,refPath);
+    await uploadBytes(fileRef,f); const url=await getDownloadURL(fileRef);
+    await addDoc(collection(db,'portfolio'),{uid,url,created:serverTimestamp()});
+    alert('Uploaded'); loadGallery();
+  };
+  async function loadGallery(){
+    const q=query(collection(db,'portfolio'),where('uid','==',auth.currentUser.uid));
+    const snap=await getDocs(q); const gallery=document.getElementById('myGallery'); gallery.innerHTML='';
+    snap.forEach(d=>{
+      const col=document.createElement('div'); col.className='col-6';
+      col.innerHTML=`<img src="${d.data().url}" class="thumb">`; gallery.appendChild(col);
+    });
+  }
+  loadGallery();
+}
+
+// CUSTOMER
+function customerPane(){
+  const content=document.getElementById('dashContent');
+  content.innerHTML='<div class="p-3"><h5>Discover Artisans</h5><div id="artisanList" class="row g-2"></div></div>';
+  loadArtisans();
+  async function loadArtisans(){
+    const usersSnap=await getDocs(query(collection(db,'users'),where('role','==','artisan')));
+    const list=document.getElementById('artisanList');
+    list.innerHTML='';
+    for(const u of usersSnap.docs){
+      const portSnap=await getDocs(query(collection(db,'portfolio'),where('uid','==',u.id)));
+      const first=portSnap.docs[0]?.data().url || 'https://via.placeholder.com/300x200?text=No+Image';
+      const data=u.data();
+      const col=document.createElement('div'); col.className='col-6';
+      col.innerHTML=`
+      <div class="card">
+        <img src="${first}" class="thumb">
+        <div class="p-2">
+          <h6 class="mb-0">${data.email.split('@')[0]}</h6>
+          <small>${data.skill||''}</small><br>
+          <a href="tel:${data.phone||''}" class="text-decoration-none">${data.phone||''}</a>
+        </div>
+      </div>`;
+      list.appendChild(col);
+    }
+  }
+}
+
+// ADMIN
+function adminPane(){
+  const content=document.getElementById('dashContent');
+  content.innerHTML='<div class="p-3"><h5>All Users</h5><table class="table table-sm" id="userTable"><thead><tr><th>Email</th><th>Role</th><th>Phone</th></tr></thead><tbody></tbody></table></div>';
+  loadUsers();
+  async function loadUsers(){
+    const snap=await getDocs(collection(db,'users')); const tbody=document.querySelector('#userTable tbody'); tbody.innerHTML='';
+    snap.forEach(d=>{
+      const tr=document.createElement('tr');
+      const dat=d.data();
+      tr.innerHTML=`<td>${dat.email}</td><td>${dat.role}</td><td>${dat.phone||''}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+}
+</script>
+</body>
+</html>
